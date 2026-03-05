@@ -268,6 +268,100 @@ export class ErmisCallSDK implements INodeCall {
     this.receiver = new MediaStreamReceiver(this, events);
   }
 
+  // ── High-Level Bidirectional Call Methods ──────────────────────
+
+  /**
+   * User B (Caller) flow: Connect → encode local stream → decode remote stream.
+   *
+   * Steps:
+   *   1. Init encoders from local MediaStream (video + audio)
+   *   2. Connect to callee's address
+   *   3. Send 'connected' signal, transceiver state, and codec configs
+   *   4. Set up receiver events and init decoders (receive loop)
+   *   5. Return the remote MediaStream for rendering
+   *
+   * @param peerAddr - The callee's endpoint address
+   * @param stream - Local MediaStream from getUserMedia
+   * @param callType - 'video' or 'audio' (default: 'video')
+   * @param events - Optional receiver event callbacks
+   * @returns The remote MediaStream to attach to a <video>/<audio> element
+   */
+  async startAsCaller(
+    peerAddr: string,
+    stream: MediaStream,
+    callType: string = 'video',
+    events?: IMediaReceiverEvents,
+  ): Promise<MediaStream | null> {
+    this.ensureInitialized();
+    if (!this.node) throw new Error('ErmisCallSDK: Call spawn() first.');
+
+    // 1. Init encoders (set up WebCodecs VideoEncoder & AudioEncoder)
+    this.sender.initEncoders(stream);
+
+    // 2. Connect to callee
+    await this.connect(peerAddr);
+
+    // 3. Send 'connected' signal + transceiver state + codec configs
+    await this.sender.sendConnected();
+    await this.sender.sendConfigs();
+
+    // 4. Set up receiver events and init decoders
+    if (events) {
+      this.receiver = new MediaStreamReceiver(this, events);
+    }
+    this.receiver.initDecoders(callType);
+
+    this._state = 'connected';
+
+    // 5. Return remote stream
+    return this.receiver.getRemoteStream();
+  }
+
+  /**
+   * User A (Callee) flow: Accept connection → decode remote stream → encode local stream.
+   *
+   * Steps:
+   *   1. Set up receiver events and init decoders (receive loop)
+   *   2. Accept incoming connection from caller
+   *   3. Init encoders from local MediaStream (video + audio)
+   *   4. Send 'connected' signal, transceiver state, and codec configs
+   *   5. Return the remote MediaStream for rendering
+   *
+   * @param stream - Local MediaStream from getUserMedia
+   * @param callType - 'video' or 'audio' (default: 'video')
+   * @param events - Optional receiver event callbacks
+   * @returns The remote MediaStream to attach to a <video>/<audio> element
+   */
+  async startAsCallee(
+    stream: MediaStream,
+    callType: string = 'video',
+    events?: IMediaReceiverEvents,
+  ): Promise<MediaStream | null> {
+    this.ensureInitialized();
+    if (!this.node) throw new Error('ErmisCallSDK: Call spawn() first.');
+
+    // 1. Set up receiver events and init decoders
+    if (events) {
+      this.receiver = new MediaStreamReceiver(this, events);
+    }
+    this.receiver.initDecoders(callType);
+
+    // 2. Accept incoming connection
+    await this.acceptConnection();
+
+    // 3. Init encoders (set up WebCodecs VideoEncoder & AudioEncoder)
+    this.sender.initEncoders(stream);
+
+    // 4. Send 'connected' signal + transceiver state + codec configs
+    await this.sender.sendConnected();
+    await this.sender.sendConfigs();
+
+    this._state = 'connected';
+
+    // 5. Return remote stream
+    return this.receiver.getRemoteStream();
+  }
+
   // ── Network Stats ────────────────────────────────────────────
 
   /**

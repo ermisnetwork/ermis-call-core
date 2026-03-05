@@ -12,9 +12,12 @@
   "scripts": {
     "build": "tsc",
     "watch": "tsc --watch",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "dev": "concurrently \"npm run watch\" \"cd examples/demo && npm run dev\"",
+    "demo": "cd examples/demo && npm run dev"
   },
   "devDependencies": {
+    "concurrently": "^9.2.1",
     "typescript": "^5.4.0"
   },
   "license": "MIT"

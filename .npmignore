@@ -1,0 +1,16 @@
+# Source (dist is published, not src)
+src/
+
+# Config files
+tsconfig.json
+.gitignore
+.eslintrc.json
+.prettierrc
+.editorconfig
+
+# Dev
+node_modules/
+*.log
+.DS_Store
+.vscode/
+.idea/

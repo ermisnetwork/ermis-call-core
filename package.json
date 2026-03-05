@@ -1,0 +1,21 @@
+{
+  "name": "ermis-call-core",
+  "version": "0.1.0",
+  "description": "Ermis Call Core SDK - WebAssembly-based peer-to-peer communication",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "src/wasm/*.wasm"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  },
+  "license": "MIT"
+}

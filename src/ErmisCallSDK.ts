@@ -10,42 +10,36 @@
 
 import initWasm, { ErmisCall } from './wasm/ermis_call_node_wasm.js';
 import type { InitInput } from './wasm/ermis_call_node_wasm.js';
-
-// ── Types ────────────────────────────────────────────────────────
-
-export interface ErmisCallConfig {
-  /** Relay server URL. Default: 'https://test-iroh.ermis.network.:8443' */
-  relayUrl?: string;
-  /** Optional secret key for spawning */
-  secretKey?: Uint8Array;
-}
-
-export interface ErmisConnectionStats {
-  rttMs?: number;
-  packetLoss?: number;
-  connectionType?: string;
-}
-
-export type ErmisCallState =
-  | 'idle'
-  | 'initializing'
-  | 'spawned'
-  | 'connected'
-  | 'closed'
-  | 'error';
+import { MediaStreamSender } from './MediaStreamSender';
+import { MediaStreamReceiver } from './MediaStreamReceiver';
+import type {
+  ErmisCallConfig,
+  ErmisConnectionStats,
+  ErmisCallState,
+  INodeCall,
+  IMediaReceiverEvents,
+} from './types';
 
 // ── SDK Class ────────────────────────────────────────────────────
 
-export class ErmisCallSDK {
+export class ErmisCallSDK implements INodeCall {
   private node: ErmisCall | null = null;
   private _state: ErmisCallState = 'idle';
   private _initialized = false;
   private relayUrl: string;
   private secretKey?: Uint8Array;
 
+  /** MediaStreamSender for encoding and sending media tracks */
+  public sender: MediaStreamSender;
+
+  /** MediaStreamReceiver for receiving and decoding media tracks */
+  public receiver: MediaStreamReceiver;
+
   constructor(config?: ErmisCallConfig) {
     this.relayUrl = config?.relayUrl ?? 'https://test-iroh.ermis.network.:8443';
     this.secretKey = config?.secretKey;
+    this.sender = new MediaStreamSender(this);
+    this.receiver = new MediaStreamReceiver(this);
   }
 
   // ── Getters ──────────────────────────────────────────────────
@@ -93,6 +87,10 @@ export class ErmisCallSDK {
    * Close the endpoint and free WASM resources.
    */
   async close(): Promise<void> {
+    // Stop encoders and decoders first
+    this.sender.stop();
+    this.receiver.stop();
+
     if (!this.node) return;
     try {
       await this.node.closeEndpoint();
@@ -103,14 +101,7 @@ export class ErmisCallSDK {
     }
   }
 
-  // ── Connection Management ────────────────────────────────────
-
-  /**
-   * Get this node's endpoint address (to share with the peer).
-   */
-  async getLocalEndpointAddr(): Promise<string> {
-    return this.getNode().getLocalEndpointAddr();
-  }
+  // ── Connection Management (INodeCall) ────────────────────────
 
   /**
    * Connect to a remote peer by address.
@@ -129,6 +120,13 @@ export class ErmisCallSDK {
   }
 
   /**
+   * Get this node's endpoint address (to share with the peer).
+   */
+  async getLocalEndpointAddr(): Promise<string> {
+    return this.getNode().getLocalEndpointAddr();
+  }
+
+  /**
    * Close the current connection (keeps the endpoint alive).
    */
   closeConnection(): void {
@@ -136,26 +134,26 @@ export class ErmisCallSDK {
     this._state = 'spawned';
   }
 
-  // ── Data Transfer ────────────────────────────────────────────
+  // ── Data Transfer (INodeCall) ────────────────────────────────
 
   /**
    * Send a video frame.
    */
-  sendFrame(data: Uint8Array): void {
+  async sendFrame(data: Uint8Array): Promise<void> {
     this.getNode().sendFrame(data);
   }
 
   /**
    * Send an audio frame.
    */
-  sendAudioFrame(data: Uint8Array): void {
+  async sendAudioFrame(data: Uint8Array): Promise<void> {
     this.getNode().sendAudioFrame(data);
   }
 
   /**
    * Send a control frame.
    */
-  sendControlFrame(data: Uint8Array): void {
+  async sendControlFrame(data: Uint8Array): Promise<void> {
     this.getNode().sendControlFrame(data);
   }
 
@@ -169,7 +167,7 @@ export class ErmisCallSDK {
   /**
    * Begin with a Group of Pictures data.
    */
-  beginWithGop(data: Uint8Array): void {
+  async beginWithGop(data: Uint8Array): Promise<void> {
     this.getNode().beginWithGop(data);
   }
 
@@ -185,6 +183,89 @@ export class ErmisCallSDK {
    */
   async asyncRecv(): Promise<Uint8Array> {
     return this.getNode().asyncRecv();
+  }
+
+  // ── Media Encoding (via MediaStreamSender) ───────────────────
+
+  /**
+   * Initialize encoders for a MediaStream (audio + video tracks).
+   * This sets up WebCodecs VideoEncoder & AudioEncoder.
+   */
+  initEncoders(stream: MediaStream): void {
+    this.sender.initEncoders(stream);
+  }
+
+  /**
+   * Initialize only the video encoder for a specific track.
+   */
+  initVideoEncoder(videoTrack: MediaStreamTrack): void {
+    this.sender.initVideoEncoder(videoTrack);
+  }
+
+  /**
+   * Initialize only the audio encoder for a specific track.
+   */
+  initAudioEncoder(audioTrack: MediaStreamTrack): void {
+    this.sender.initAudioEncoder(audioTrack);
+  }
+
+  /**
+   * Replace the current video track (e.g. camera switch).
+   */
+  async replaceVideoTrack(track: MediaStreamTrack): Promise<void> {
+    await this.sender.replaceVideoTrack(track);
+  }
+
+  /**
+   * Replace the current audio track.
+   */
+  async replaceAudioTrack(track: MediaStreamTrack): Promise<void> {
+    await this.sender.replaceAudioTrack(track);
+  }
+
+  /**
+   * Request a keyframe to be sent immediately.
+   */
+  requestKeyFrame(): void {
+    this.sender.requestKeyFrame();
+  }
+
+  /**
+   * Connect to peer and start sending encoded media.
+   */
+  async connectAndSend(address: string): Promise<void> {
+    await this.sender.connect(address);
+  }
+
+  // ── Media Decoding (via MediaStreamReceiver) ─────────────────
+
+  /**
+   * Initialize decoders and start receiving loop.
+   * @param callType - 'video' or 'audio'
+   */
+  initDecoders(callType: string): void {
+    this.receiver.initDecoders(callType);
+  }
+
+  /**
+   * Get the remote MediaStream (decoded audio + video tracks).
+   */
+  getRemoteStream(): MediaStream | null {
+    return this.receiver.getRemoteStream();
+  }
+
+  /**
+   * Accept incoming connection and start receive.
+   */
+  async acceptAndReceive(): Promise<void> {
+    await this.receiver.acceptConnection();
+  }
+
+  /**
+   * Set event callbacks for receiver (onConnected, onEndCall, etc.).
+   */
+  setReceiverEvents(events: IMediaReceiverEvents): void {
+    this.receiver = new MediaStreamReceiver(this, events);
   }
 
   // ── Network Stats ────────────────────────────────────────────
